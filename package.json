@@ -1,0 +1,20 @@
+{
+  "name": "carblens-backend",
+  "version": "1.0.0",
+  "description": "CarbLens API - Backend for AI-powered carb counting",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["diabetes", "insulin", "ai", "carbs"],
+  "author": "CarbLens",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
