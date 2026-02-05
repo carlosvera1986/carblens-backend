@@ -38,49 +38,89 @@ app.post('/api/analyze', async (req, res) => {
         const base64Data = image.includes('base64,') ? image.split(',')[1] : image;
 
         // Build prompt
-        const prompt = `Analiza esta imagen de comida como un endocrinólogo experto en diabetes.
+        const prompt = `Eres un endocrinólogo experto especializado en conteo de carbohidratos para personas con diabetes tipo 1. Tu trabajo es CRÍTICO para la salud del paciente.
 
-Usuario: ${userSettings.name || 'Usuario'}
-Ratio de insulina: 1u cada ${userSettings.insulinRatio}g HC
-Factor de sensibilidad: 1u baja ${userSettings.sensitivityFactor} mg/dL
-Objetivo de glucosa: ${userSettings.targetGlucose} mg/dL
-${currentGlucose ? `Glucosa actual: ${currentGlucose} mg/dL` : 'Glucosa actual: No proporcionada'}
+CONTEXTO DEL USUARIO:
+- Nombre: ${userSettings.name || 'Usuario'}
+- Ratio de insulina: 1 unidad cada ${userSettings.insulinRatio}g de HC
+- Factor de sensibilidad: 1 unidad baja ${userSettings.sensitivityFactor} mg/dL
+- Objetivo de glucosa: ${userSettings.targetGlucose} mg/dL
+${currentGlucose ? `- Glucosa actual: ${currentGlucose} mg/dL` : '- Glucosa actual: No proporcionada'}
 
-Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin backticks) en este formato:
+REGLAS ESTRICTAS - SEGURIDAD DEL PACIENTE:
+
+1. SOLO identifica alimentos que puedas ver CLARAMENTE en la imagen
+2. Si NO estás seguro de un alimento → NO lo incluyas
+3. Si NO puedes ver la porción claramente → estima de forma CONSERVADORA (menos HC)
+4. NUNCA inventes alimentos que no están visibles
+5. Si la imagen es borrosa o poco clara → indícalo en el mensaje
+6. Sé REALISTA con las porciones - no exageres
+7. Prefiere SUBESTIMAR carbohidratos que SOBREESTIMAR (más seguro)
+8. Si hay duda entre 2 cantidades → elige la MENOR
+9. Solo incluye carbohidratos significativos (>1g)
+
+ESTIMACIÓN DE PORCIONES:
+- 1 rebanada de pan: 15g HC
+- 1 taza de arroz cocido: 45g HC
+- 1 papa mediana: 30g HC
+- 1 banana mediana: 27g HC
+- 1 manzana mediana: 25g HC
+- 100g pasta cocida: 25g HC
+- Vegetales sin almidón: 0-5g HC
+
+FORMATO DE RESPUESTA:
+Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin backticks):
 
 {
-  "greeting": "mensaje breve y amigable",
+  "greeting": "Mensaje breve confirmando lo que ves",
+  "imageQuality": "clara/aceptable/poco_clara",
+  "confidence": "alta/media/baja",
   "foods": [
-    {"name": "nombre del alimento", "amount": "cantidad estimada", "carbs": número}
+    {
+      "name": "nombre exacto del alimento visible",
+      "amount": "cantidad estimada (ej: 1 rebanada, 1/2 taza, 80g)",
+      "carbs": número_conservador,
+      "confidence": "alta/media/baja"
+    }
   ],
-  "totalCarbs": número_total,
+  "totalCarbs": número_total_CONSERVADOR,
   "mealInsulin": {
-    "calculation": "Con tu ratio 1u/${userSettings.insulinRatio}g → X unidades",
+    "calculation": "Con tu ratio 1u/${userSettings.insulinRatio}g → X unidades (redondeado arriba)",
     "units": número_redondeado_arriba
   },
   "correction": {
     "needed": ${currentGlucose && parseInt(currentGlucose) > userSettings.targetGlucose ? 'true' : 'false'},
-    "calculation": "${currentGlucose ? 'Glucemia: ' + currentGlucose + ' mg/dL, Objetivo: ' + userSettings.targetGlucose + ' mg/dL' : ''}",
-    "units": número_o_0
+    "calculation": "${currentGlucose && parseInt(currentGlucose) > userSettings.targetGlucose ? 'Glucemia actual ' + currentGlucose + ' mg/dL está por encima del objetivo ' + userSettings.targetGlucose + ' mg/dL' : currentGlucose ? 'Glucemia ' + currentGlucose + ' mg/dL dentro del rango objetivo' : 'No se proporcionó glucemia actual'}",
+    "units": ${currentGlucose && parseInt(currentGlucose) > userSettings.targetGlucose ? 'número_de_corrección' : '0'}
   },
   "recommendation": {
-    "conservative": número,
-    "standard": número,
-    "note": "Control en 60-90 min. Si >180 y estable → +0.5-1u. Si flecha ↓, no agregar."
-  }
+    "conservative": número_total_menos_05u,
+    "standard": número_total_completo,
+    "note": "Control en 60-90 min. Si >180 y estable/subiendo → considerar +0.5-1u. Si tendencia a la baja, no agregar."
+  },
+  "warnings": ["Lista de advertencias si las hay, ej: 'Porción de pasta difícil de estimar', 'Imagen poco clara'"]
 }
 
-IMPORTANTE:
-- Identifica TODOS los alimentos visibles en la imagen
-- Calcula carbohidratos de manera REALISTA y PRECISA
-- SIEMPRE redondea la insulina por comida HACIA ARRIBA (Math.ceil)
-- Si la glucosa actual está por encima del objetivo, calcula la corrección
-- Sé preciso y profesional como un endocrinólogo experimentado`;
+EJEMPLOS DE RESPUESTAS CORRECTAS:
 
-        // Call Claude API
+BUENO ✅:
+- "Pan integral: 2 rebanadas → 30g HC" (visible y claro)
+- "Banana: 1 mediana → 25g HC" (porción estándar)
+- "Arroz: aprox. 1/2 taza → 22g HC" (estimación conservadora)
+
+MALO ❌:
+- Incluir "salsa de tomate" si no se ve claramente
+- Estimar "2 tazas de pasta" cuando parece menos
+- Agregar alimentos no visibles en la imagen
+
+RECUERDA: Es MEJOR subestimar que sobreestimar. El paciente puede corregir después, pero demasiada insulina es peligroso.
+
+Analiza la imagen ahora con MÁXIMA PRECISIÓN y CAUTELA.`;
+
+        // Call Claude API - Using Opus for maximum accuracy
         const message = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 2048,
+            model: 'claude-opus-4-20250514',
+            max_tokens: 3000,
             messages: [{
                 role: 'user',
                 content: [
