@@ -13,11 +13,7 @@ const anthropic = new Anthropic({
 });
 
 app.get('/', (req, res) => {
-    res.json({ 
-        status: 'ok',
-        message: 'CarbLens API v1.1',
-        timestamp: new Date().toISOString()
-    });
+    res.json({ status: 'ok', message: 'CarbLens API Running' });
 });
 
 app.post('/api/analyze', async (req, res) => {
@@ -25,82 +21,21 @@ app.post('/api/analyze', async (req, res) => {
         const { image, userSettings, currentGlucose } = req.body;
 
         if (!image) {
-            return res.status(400).json({ error: 'No image provided' });
+            return res.status(400).json({ error: 'No image' });
         }
 
-        console.log('📸 Analyzing food...');
+        console.log('Analyzing...');
 
         const base64Data = image.includes('base64,') ? image.split(',')[1] : image;
-
-        const glucoseInfo = currentGlucose ? `Glucosa actual: ${currentGlucose} mg/dL` : 'Glucosa actual: No proporcionada';
-        const needsCorrection = currentGlucose && parseInt(currentGlucose) > userSettings.targetGlucose;
-
-        const prompt = `Eres un endocrinólogo experto en conteo de carbohidratos para diabetes tipo 1.
-
-CONTEXTO DEL USUARIO:
-- Ratio de insulina: 1u cada ${userSettings.insulinRatio}g HC
-- Factor de sensibilidad: 1u baja ${userSettings.sensitivityFactor} mg/dL
-- Objetivo de glucosa: ${userSettings.targetGlucose} mg/dL
-- ${glucoseInfo}
-
-REGLAS CRÍTICAS:
-1. SOLO identifica alimentos CLARAMENTE visibles
-2. Si hay DUDA → NO incluyas el alimento
-3. Estimaciones CONSERVADORAS (prefiere menos HC)
-4. NUNCA inventes alimentos
-5. Si imagen borrosa → indica advertencia
-6. Sé REALISTA con porciones
-7. PREFIERE SUBESTIMAR que SOBREESTIMAR
-8. Solo carbohidratos >1g
-
-REFERENCIAS:
-- Pan: 15g HC/rebanada
-- Arroz cocido: 45g HC/taza
-- Pasta cocida: 25g HC/100g
-- Papa mediana: 30g HC
-- Banana: 27g HC
-- Manzana: 25g HC
-- Tortilla maíz: 12g HC
-- Tortilla harina: 20g HC
-
-RESPONDE EN JSON (sin markdown):
-
-{
-  "greeting": "Lo que ves brevemente",
-  "imageQuality": "clara/aceptable/poco_clara",
-  "confidence": "alta/media/baja",
-  "foods": [
-    {
-      "name": "nombre exacto",
-      "amount": "cantidad",
-      "carbs": numero,
-      "confidence": "alta/media/baja"
-    }
-  ],
-  "totalCarbs": numero_total,
-  "mealInsulin": {
-    "calculation": "Explicación del cálculo",
-    "units": numero_redondeado_arriba
-  },
-  "correction": {
-    "needed": ${needsCorrection},
-    "calculation": "Explicación si aplica",
-    "units": numero
-  },
-  "recommendation": {
-    "conservative": numero_menor,
-    "standard": numero_normal,
-    "note": "Control en 60-90 min"
-  },
-  "warnings": ["advertencias si existen"]
-}
-
-RECUERDA: Mejor quedarse corto que pasarse. Analiza con máxima precisión.`;
+        
+        const ratio = userSettings.insulinRatio;
+        const target = userSettings.targetGlucose;
+        const factor = userSettings.sensitivityFactor;
+        const glucose = currentGlucose || 0;
 
         const message = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 3000,
-            temperature: 0.3,
+            max_tokens: 2000,
             messages: [{
                 role: 'user',
                 content: [
@@ -114,77 +49,45 @@ RECUERDA: Mejor quedarse corto que pasarse. Analiza con máxima precisión.`;
                     },
                     {
                         type: 'text',
-                        text: prompt
+                        text: 'Eres un experto en diabetes. Analiza esta comida. SOLO identifica lo que VEAS CLARAMENTE. NO inventes. Sé CONSERVADOR con las cantidades (mejor menos que más). Ratio insulina: 1u cada ' + ratio + 'g. Responde SOLO en JSON sin markdown: {"greeting":"texto","confidence":"alta/media/baja","foods":[{"name":"alimento","amount":"cantidad","carbs":numero}],"totalCarbs":numero,"mealInsulin":{"calculation":"explicacion","units":numero},"correction":{"needed":false,"calculation":"","units":0},"recommendation":{"conservative":numero,"standard":numero,"note":"Control en 60-90min"},"warnings":[]}'
                     }
                 ]
             }]
         });
 
-        const responseText = message.content
-            .filter(block => block.type === 'text')
-            .map(block => block.text)
-            .join('');
+        const text = message.content.find(c => c.type === 'text').text;
+        let clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        
+        const match = clean.match(/\{[\s\S]*\}/);
+        if (match) clean = match[0];
 
-        console.log('🤖 Response received');
-
-        let cleanText = responseText.trim();
-        cleanText = cleanText.replace(/```json/g, '').replace(/```/g, '').trim();
-
-        const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-            cleanText = jsonMatch[0];
+        const analysis = JSON.parse(clean);
+        
+        analysis.mealInsulin.units = Math.ceil(analysis.totalCarbs / ratio);
+        
+        if (glucose > target) {
+            analysis.correction.needed = true;
+            const diff = glucose - target;
+            analysis.correction.units = Math.round((diff / factor) * 10) / 10;
+            analysis.correction.calculation = 'Glucemia ' + glucose + ' sobre objetivo ' + target;
         }
+        
+        const totalUnits = analysis.mealInsulin.units + (analysis.correction.units || 0);
+        analysis.recommendation.conservative = Math.max(0, totalUnits - 0.5);
+        analysis.recommendation.standard = totalUnits;
 
-        let analysis;
-        try {
-            analysis = JSON.parse(cleanText);
-        } catch (parseError) {
-            console.error('❌ Parse error:', parseError);
-            throw new Error('Invalid response format');
-        }
+        console.log('Success');
 
-        if (!analysis.foods || !analysis.totalCarbs || !analysis.mealInsulin) {
-            throw new Error('Incomplete response');
-        }
-
-        analysis.mealInsulin.units = Math.ceil(analysis.totalCarbs / userSettings.insulinRatio);
-
-        if (!analysis.recommendation.conservative) {
-            const total = analysis.mealInsulin.units + (analysis.correction?.units || 0);
-            analysis.recommendation.conservative = Math.max(0, total - 0.5);
-            analysis.recommendation.standard = total;
-        }
-
-        console.log('✅ Success:', {
-            foods: analysis.foods.length,
-            totalCarbs: analysis.totalCarbs,
-            confidence: analysis.confidence
-        });
-
-        res.json({
-            success: true,
-            analysis: analysis,
-            timestamp: new Date().toISOString()
-        });
+        res.json({ success: true, analysis: analysis });
 
     } catch (error) {
-        console.error('❌ Error:', error.message);
-        res.status(500).json({ 
-            error: 'Error analyzing image',
-            message: error.message 
-        });
+        console.error('Error:', error.message);
+        res.status(500).json({ error: error.message });
     }
 });
 
 app.listen(PORT, () => {
-    console.log(`
-╔═══════════════════════════════════════╗
-║   🔍 CARBLENS API v1.1 - RUNNING     ║
-╚═══════════════════════════════════════╝
-Port: ${PORT}
-API Key: ${process.env.ANTHROPIC_API_KEY ? '✅' : '❌'}
-Ready!
-    `);
+    console.log('CarbLens API on port', PORT);
 });
 
 module.exports = app;
