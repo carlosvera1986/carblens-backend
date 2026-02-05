@@ -13,7 +13,7 @@ const anthropic = new Anthropic({
 });
 
 app.get('/', (req, res) => {
-    res.json({ status: 'ok', message: 'CarbLens API Running' });
+    res.json({ status: 'ok', message: 'CarbLens API v1.2 - Enhanced Precision' });
 });
 
 app.post('/api/analyze', async (req, res) => {
@@ -24,7 +24,7 @@ app.post('/api/analyze', async (req, res) => {
             return res.status(400).json({ error: 'No image' });
         }
 
-        console.log('Analyzing...');
+        console.log('Analyzing with enhanced precision...');
 
         const base64Data = image.includes('base64,') ? image.split(',')[1] : image;
         
@@ -33,9 +33,24 @@ app.post('/api/analyze', async (req, res) => {
         const factor = userSettings.sensitivityFactor;
         const glucose = currentGlucose || 0;
 
+        const promptText = 'Eres un endocrinologo experto en diabetes tipo 1. Analiza esta comida con PRECISION REALISTA. ' +
+        'REGLAS: 1) Identifica SOLO lo visible, 2) Estima porciones observando el tamano del plato (plato estandar=23-25cm), ' +
+        '3) Se PRECISO no conservador en exceso, 4) Usa valor MEDIO del rango esperado. ' +
+        'REFERENCIAS: Pan 15g/rebanada, Arroz 45g/taza o 23g/media-taza, Pure de papa 35g/taza o 18g/media-taza, ' +
+        'Pasta 25g/100g, Papa mediana 30g, Milanesa empanizada 15-20g. ' +
+        'Usuario: ratio 1u cada ' + ratio + 'g HC, objetivo ' + target + ' mg/dL, factor ' + factor + ' mg/dL. ' +
+        'Responde SOLO JSON sin markdown: ' +
+        '{"greeting":"texto","imageQuality":"clara/aceptable/poco_clara","confidence":"alta/media/baja",' +
+        '"foods":[{"name":"alimento","amount":"cantidad con unidad","carbs":numero_realista,"confidence":"alta/media/baja"}],' +
+        '"totalCarbs":numero_total_realista,"mealInsulin":{"calculation":"explicacion","units":numero},' +
+        '"correction":{"needed":false,"calculation":"","units":0},' +
+        '"recommendation":{"conservative":numero,"standard":numero,"note":"Control en 60-90min"},' +
+        '"warnings":[],"portionNotes":"como estimaste porciones"}';
+
         const message = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 2000,
+            max_tokens: 2500,
+            temperature: 0.2,
             messages: [{
                 role: 'user',
                 content: [
@@ -49,7 +64,7 @@ app.post('/api/analyze', async (req, res) => {
                     },
                     {
                         type: 'text',
-                        text: 'Eres un experto en diabetes. Analiza esta comida. SOLO identifica lo que VEAS CLARAMENTE. NO inventes. Sé CONSERVADOR con las cantidades (mejor menos que más). Ratio insulina: 1u cada ' + ratio + 'g. Responde SOLO en JSON sin markdown: {"greeting":"texto","confidence":"alta/media/baja","foods":[{"name":"alimento","amount":"cantidad","carbs":numero}],"totalCarbs":numero,"mealInsulin":{"calculation":"explicacion","units":numero},"correction":{"needed":false,"calculation":"","units":0},"recommendation":{"conservative":numero,"standard":numero,"note":"Control en 60-90min"},"warnings":[]}'
+                        text: promptText
                     }
                 ]
             }]
@@ -69,14 +84,17 @@ app.post('/api/analyze', async (req, res) => {
             analysis.correction.needed = true;
             const diff = glucose - target;
             analysis.correction.units = Math.round((diff / factor) * 10) / 10;
-            analysis.correction.calculation = 'Glucemia ' + glucose + ' sobre objetivo ' + target;
+            analysis.correction.calculation = 'Glucemia ' + glucose + ' sobre objetivo ' + target + ' = ' + analysis.correction.units + 'u';
         }
         
         const totalUnits = analysis.mealInsulin.units + (analysis.correction.units || 0);
         analysis.recommendation.conservative = Math.max(0, totalUnits - 0.5);
         analysis.recommendation.standard = totalUnits;
+        
+        // Mark as editable
+        analysis.editable = true;
 
-        console.log('Success');
+        console.log('Success:', analysis.totalCarbs + 'g HC');
 
         res.json({ success: true, analysis: analysis });
 
@@ -87,7 +105,7 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log('CarbLens API on port', PORT);
+    console.log('CarbLens API v1.2 on port', PORT);
 });
 
 module.exports = app;
