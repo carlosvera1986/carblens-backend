@@ -18,7 +18,7 @@ const anthropic = new Anthropic({
 app.get('/', (req, res) => {
     res.json({ 
         status: 'ok',
-        message: 'CarbLens API v1.0 - Running',
+        message: 'CarbLens API v1.1 - Running',
         timestamp: new Date().toISOString()
     });
 });
@@ -32,13 +32,13 @@ app.post('/api/analyze', async (req, res) => {
             return res.status(400).json({ error: 'No image provided' });
         }
 
-        console.log('📸 Analyzing food...');
+        console.log('📸 Analyzing food with enhanced medical prompt...');
 
         // Extract base64 data
         const base64Data = image.includes('base64,') ? image.split(',')[1] : image;
 
-        // Build prompt
-        const prompt = `Eres un endocrinólogo experto especializado en conteo de carbohidratos para personas con diabetes tipo 1. Tu trabajo es CRÍTICO para la salud del paciente.
+        // Enhanced medical prompt
+        const prompt = `Eres un endocrinólogo experto especializado en conteo de carbohidratos para personas con diabetes tipo 1. Tu análisis es CRÍTICO para la seguridad del paciente.
 
 CONTEXTO DEL USUARIO:
 - Nombre: ${userSettings.name || 'Usuario'}
@@ -47,80 +47,84 @@ CONTEXTO DEL USUARIO:
 - Objetivo de glucosa: ${userSettings.targetGlucose} mg/dL
 ${currentGlucose ? `- Glucosa actual: ${currentGlucose} mg/dL` : '- Glucosa actual: No proporcionada'}
 
-REGLAS ESTRICTAS - SEGURIDAD DEL PACIENTE:
+REGLAS CRÍTICAS DE SEGURIDAD:
 
-1. SOLO identifica alimentos que puedas ver CLARAMENTE en la imagen
-2. Si NO estás seguro de un alimento → NO lo incluyas
-3. Si NO puedes ver la porción claramente → estima de forma CONSERVADORA (menos HC)
-4. NUNCA inventes alimentos que no están visibles
-5. Si la imagen es borrosa o poco clara → indícalo en el mensaje
-6. Sé REALISTA con las porciones - no exageres
-7. Prefiere SUBESTIMAR carbohidratos que SOBREESTIMAR (más seguro)
-8. Si hay duda entre 2 cantidades → elige la MENOR
-9. Solo incluye carbohidratos significativos (>1g)
+1. ✅ SOLO identifica alimentos CLARAMENTE VISIBLES
+2. ✅ Si hay DUDA sobre un alimento → NO lo incluyas
+3. ✅ Si la porción NO es clara → estima CONSERVADORAMENTE (menos HC)
+4. ✅ NUNCA inventes alimentos no visibles
+5. ✅ Si la imagen es borrosa → indícalo como advertencia
+6. ✅ Sé REALISTA con porciones - no exageres
+7. ✅ PREFIERE SUBESTIMAR que SOBREESTIMAR (más seguro)
+8. ✅ Entre dos cantidades → elige la MENOR
+9. ✅ Solo incluye carbohidratos significativos (>1g HC)
+10. ✅ Vegetales sin almidón → máximo 5g HC
 
-ESTIMACIÓN DE PORCIONES:
-- 1 rebanada de pan: 15g HC
-- 1 taza de arroz cocido: 45g HC
-- 1 papa mediana: 30g HC
-- 1 banana mediana: 27g HC
-- 1 manzana mediana: 25g HC
-- 100g pasta cocida: 25g HC
-- Vegetales sin almidón: 0-5g HC
+REFERENCIA DE PORCIONES ESTÁNDAR:
+- Pan blanco/integral: 15g HC por rebanada
+- Arroz blanco cocido: 45g HC por taza (200g)
+- Pasta cocida: 25g HC por 100g
+- Papa mediana: 30g HC
+- Banana mediana: 27g HC
+- Manzana mediana: 25g HC
+- Tortilla de maíz: 12g HC
+- Tortilla de harina: 20g HC
+- Yogurt natural: 12g HC por 200ml
+- Leche: 12g HC por taza
 
-FORMATO DE RESPUESTA:
-Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin backticks):
+FORMATO DE RESPUESTA (JSON válido, sin markdown):
 
 {
-  "greeting": "Mensaje breve confirmando lo que ves",
+  "greeting": "Confirmación breve de lo que ves",
   "imageQuality": "clara/aceptable/poco_clara",
   "confidence": "alta/media/baja",
   "foods": [
     {
-      "name": "nombre exacto del alimento visible",
-      "amount": "cantidad estimada (ej: 1 rebanada, 1/2 taza, 80g)",
+      "name": "nombre exacto",
+      "amount": "cantidad específica",
       "carbs": número_conservador,
       "confidence": "alta/media/baja"
     }
   ],
-  "totalCarbs": número_total_CONSERVADOR,
+  "totalCarbs": suma_total_conservadora,
   "mealInsulin": {
-    "calculation": "Con tu ratio 1u/${userSettings.insulinRatio}g → X unidades (redondeado arriba)",
-    "units": número_redondeado_arriba
+    "calculation": "Con tu ratio 1u/${userSettings.insulinRatio}g → X unidades",
+    "units": ${Math.ceil(45 / userSettings.insulinRatio)}
   },
   "correction": {
     "needed": ${currentGlucose && parseInt(currentGlucose) > userSettings.targetGlucose ? 'true' : 'false'},
-    "calculation": "${currentGlucose && parseInt(currentGlucose) > userSettings.targetGlucose ? 'Glucemia actual ' + currentGlucose + ' mg/dL está por encima del objetivo ' + userSettings.targetGlucose + ' mg/dL' : currentGlucose ? 'Glucemia ' + currentGlucose + ' mg/dL dentro del rango objetivo' : 'No se proporcionó glucemia actual'}",
-    "units": ${currentGlucose && parseInt(currentGlucose) > userSettings.targetGlucose ? 'número_de_corrección' : '0'}
+    "calculation": "${currentGlucose && parseInt(currentGlucose) > userSettings.targetGlucose ? 'Glucemia ' + currentGlucose + ' por encima de objetivo ' + userSettings.targetGlucose : currentGlucose ? 'Glucemia ' + currentGlucose + ' en rango' : 'Sin dato de glucemia'}",
+    "units": ${currentGlucose && parseInt(currentGlucose) > userSettings.targetGlucose ? Math.round((parseInt(currentGlucose) - userSettings.targetGlucose) / userSettings.sensitivityFactor * 10) / 10 : 0}
   },
   "recommendation": {
-    "conservative": número_total_menos_05u,
-    "standard": número_total_completo,
-    "note": "Control en 60-90 min. Si >180 y estable/subiendo → considerar +0.5-1u. Si tendencia a la baja, no agregar."
+    "conservative": número_menor,
+    "standard": número_estándar,
+    "note": "Control en 60-90 min. Si >180 y estable → +0.5-1u. Si baja → no agregar."
   },
-  "warnings": ["Lista de advertencias si las hay, ej: 'Porción de pasta difícil de estimar', 'Imagen poco clara'"]
+  "warnings": ["Lista de advertencias si existen"]
 }
 
-EJEMPLOS DE RESPUESTAS CORRECTAS:
+EJEMPLOS:
 
-BUENO ✅:
-- "Pan integral: 2 rebanadas → 30g HC" (visible y claro)
-- "Banana: 1 mediana → 25g HC" (porción estándar)
-- "Arroz: aprox. 1/2 taza → 22g HC" (estimación conservadora)
+✅ CORRECTO:
+- "Pan: 2 rebanadas visibles → 30g HC" 
+- "Arroz: aproximadamente 1/2 taza → 22g HC"
+- "Banana: 1 mediana completa → 27g HC"
 
-MALO ❌:
-- Incluir "salsa de tomate" si no se ve claramente
-- Estimar "2 tazas de pasta" cuando parece menos
-- Agregar alimentos no visibles en la imagen
+❌ INCORRECTO:
+- Agregar "mayonesa" si no se ve
+- "2 tazas de arroz" cuando parece menos
+- Incluir alimentos fuera de la imagen
 
-RECUERDA: Es MEJOR subestimar que sobreestimar. El paciente puede corregir después, pero demasiada insulina es peligroso.
+PRINCIPIO FUNDAMENTAL: Más vale quedarse corto que pasarse. El paciente puede corregir, pero exceso de insulina es peligroso.
 
-Analiza la imagen ahora con MÁXIMA PRECISIÓN y CAUTELA.`;
+Analiza la imagen CON MÁXIMA PRECISIÓN Y CAUTELA:`;
 
-        // Call Claude API - Using Opus for maximum accuracy
+        // Call Claude API with Sonnet 4 (stable and accurate)
         const message = await anthropic.messages.create({
-            model: 'claude-opus-4-20250514',
+            model: 'claude-sonnet-4-20250514',
             max_tokens: 3000,
+            temperature: 0.3,
             messages: [{
                 role: 'user',
                 content: [
@@ -146,7 +150,7 @@ Analiza la imagen ahora con MÁXIMA PRECISIÓN y CAUTELA.`;
             .map(block => block.text)
             .join('');
 
-        console.log('🤖 Claude response received');
+        console.log('🤖 Response received from Claude');
 
         // Clean and parse JSON
         let cleanText = responseText.trim();
@@ -162,7 +166,7 @@ Analiza la imagen ahora con MÁXIMA PRECISIÓN y CAUTELA.`;
             analysis = JSON.parse(cleanText);
         } catch (parseError) {
             console.error('❌ JSON parse error:', parseError);
-            console.error('Received text:', cleanText.substring(0, 500));
+            console.error('Received:', cleanText.substring(0, 500));
             throw new Error('Invalid AI response format');
         }
 
@@ -171,10 +175,22 @@ Analiza la imagen ahora con MÁXIMA PRECISIÓN y CAUTELA.`;
             throw new Error('Incomplete AI response');
         }
 
-        // Ensure proper rounding
+        // Ensure proper rounding (ALWAYS round UP for safety)
         analysis.mealInsulin.units = Math.ceil(analysis.totalCarbs / userSettings.insulinRatio);
 
-        console.log('✅ Analysis complete');
+        // Ensure conservative and standard recommendations exist
+        if (!analysis.recommendation.conservative) {
+            analysis.recommendation.conservative = Math.max(0, analysis.mealInsulin.units + (analysis.correction?.units || 0) - 0.5);
+        }
+        if (!analysis.recommendation.standard) {
+            analysis.recommendation.standard = analysis.mealInsulin.units + (analysis.correction?.units || 0);
+        }
+
+        console.log('✅ Analysis complete:', {
+            foods: analysis.foods.length,
+            totalCarbs: analysis.totalCarbs,
+            confidence: analysis.confidence
+        });
 
         res.json({
             success: true,
@@ -183,7 +199,7 @@ Analiza la imagen ahora con MÁXIMA PRECISIÓN y CAUTELA.`;
         });
 
     } catch (error) {
-        console.error('❌ Error:', error);
+        console.error('❌ Error:', error.message);
         
         res.status(500).json({ 
             error: 'Error analyzing image',
@@ -197,17 +213,19 @@ app.listen(PORT, () => {
     console.log(`
 ╔═══════════════════════════════════════════════════════╗
 ║                                                       ║
-║         🔍 CARBLENS API - SERVER RUNNING             ║
+║         🔍 CARBLENS API v1.1 - RUNNING               ║
+║              Enhanced Medical Accuracy                ║
 ║                                                       ║
 ╚═══════════════════════════════════════════════════════╝
 
 📡 Port: ${PORT}
 🔑 API Key: ${process.env.ANTHROPIC_API_KEY ? '✅ Configured' : '❌ Missing'}
+🤖 Model: Claude Sonnet 4 (Medical Grade)
 🌍 Endpoints:
    - GET  /
    - POST /api/analyze
 
-💡 Ready to receive requests
+💡 Ready for medical-grade food analysis
     `);
 });
 
